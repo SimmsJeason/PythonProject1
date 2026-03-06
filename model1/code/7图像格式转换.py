@@ -2,21 +2,23 @@
 import os
 import SimpleITK as sitk
 import numpy as np
+import sys
 
 # ===================== 配置全局路径（唯一需要修改的地方） =====================
 # 替换为你的根目录绝对路径（路径用r""包裹，避免转义符问题）
-ROOT_DIR = r"E:\LungAdenocarcinoma_Data"
+ROOT_DIR = r"D:\gulianyu\LungAd_Radiomics"
 # 原始DICOM存放目录（无需修改，按文件夹结构自动拼接）
-RAW_DICOM_DIR = os.path.join(ROOT_DIR, "raw_dicom")
+RAW_DICOM_DIR = os.path.join(ROOT_DIR, "raw_data")
 # 转换后NIfTI输出目录（无需修改）
 CONVERTED_DIR = os.path.join(ROOT_DIR, "converted_nifti")
 
+ERROR_ID = [1016,1260,2198,2222,2223,2224,2225,2226,2228,2232,2237,2238,2239,2243,2247,2248,2253,2255,2257,2258,2259,2260,2262,2263,2266,2269,2271,2278,2282,2283,2298,2301,2304,2307,2308,2310]
 
 # ===================== 核心函数：单个DICOM序列转NIfTI =====================
 def convert_dicom_series_to_nifti(dicom_series_dir, output_nifti_path):
     """
     将单个DICOM序列（如CT/PET）转换为NIfTI格式（.nii.gz）
-    :param dicom_series_dir: DICOM序列文件夹路径（如case_001/CT_DICOM）
+    :param dicom_series_dir: DICOM序列文件夹路径（如case_001/CT）
     :param output_nifti_path: 输出NIfTI文件路径（如converted_nifti/case_001/case_001_CT.nii.gz）
     """
     try:
@@ -60,6 +62,9 @@ def batch_convert_all_cases():
 
     # 3. 遍历每个病例，转换CT和PET
     for case_id in case_folders:
+        #重新执行失败的id
+        if case_id not in ERROR_ID:
+            continue
         print(f"\n========== 开始处理病例：{case_id} ==========")
 
         # 创建该病例的输出子文件夹
@@ -67,7 +72,7 @@ def batch_convert_all_cases():
         os.makedirs(case_output_dir, exist_ok=True)
 
         # ---------------------- 转换CT ----------------------
-        ct_dicom_dir = os.path.join(RAW_DICOM_DIR, case_id, "CT_DICOM")
+        ct_dicom_dir = os.path.join(RAW_DICOM_DIR, case_id, "CT")
         ct_nifti_path = os.path.join(case_output_dir, f"{case_id}_CT.nii.gz")
         if os.path.exists(ct_dicom_dir):
             convert_dicom_series_to_nifti(ct_dicom_dir, ct_nifti_path)
@@ -75,7 +80,7 @@ def batch_convert_all_cases():
             print(f"❌ 未找到CT DICOM文件夹：{ct_dicom_dir}")
 
         # ---------------------- 转换PET ----------------------
-        pet_dicom_dir = os.path.join(RAW_DICOM_DIR, case_id, "PET_DICOM")
+        pet_dicom_dir = os.path.join(RAW_DICOM_DIR, case_id, "PET")
         pet_nifti_path = os.path.join(case_output_dir, f"{case_id}_PET.nii.gz")
         if os.path.exists(pet_dicom_dir):
             convert_dicom_series_to_nifti(pet_dicom_dir, pet_nifti_path)
