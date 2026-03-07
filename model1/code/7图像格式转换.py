@@ -12,7 +12,7 @@ RAW_DICOM_DIR = os.path.join(ROOT_DIR, "raw_data")
 # 转换后NIfTI输出目录（无需修改）
 CONVERTED_DIR = os.path.join(ROOT_DIR, "converted_nifti")
 
-ERROR_ID = [1016,1260,2198,2222,2223,2224,2225,2226,2228,2232,2237,2238,2239,2243,2247,2248,2253,2255,2257,2258,2259,2260,2262,2263,2266,2269,2271,2278,2282,2283,2298,2301,2304,2307,2308,2310]
+ERROR_ID = [2216,2227,2244,2249]
 
 # ===================== 核心函数：单个DICOM序列转NIfTI =====================
 def convert_dicom_series_to_nifti(dicom_series_dir, output_nifti_path):
@@ -62,8 +62,9 @@ def batch_convert_all_cases():
 
     # 3. 遍历每个病例，转换CT和PET
     for case_id in case_folders:
+        case_id_int = int(case_id)
         #重新执行失败的id
-        if case_id not in ERROR_ID:
+        if case_id_int not in ERROR_ID:
             continue
         print(f"\n========== 开始处理病例：{case_id} ==========")
 
