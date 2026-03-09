@@ -5,9 +5,9 @@ import numpy as np
 
 # ===================== 配置全局路径 =====================
 ROOT_DIR = r"D:\gulianyu\LungAd_Radiomics"
-CONVERTED_DIR = os.path.join(ROOT_DIR, "converted_nifti")
+CT_CONVERTED_DIR = os.path.join(ROOT_DIR, "converted_nifti")
+PET_SUV_DIR = os.path.join(ROOT_DIR, "pet_suv")
 REGISTERED_DIR = os.path.join(ROOT_DIR, "registered_nifti")
-ERROR_ID = [2216,2227,2244,2249]
 
 def ensure_3d(image, image_name="图像"):
     """
@@ -56,8 +56,8 @@ def ensure_3d(image, image_name="图像"):
 
 
 def register_pet_to_ct(case_id):
-    ct_path = os.path.join(CONVERTED_DIR, case_id, f"{case_id}_CT.nii.gz")
-    pet_path = os.path.join(CONVERTED_DIR, case_id, f"{case_id}_PET.nii.gz")
+    ct_path = os.path.join(CT_CONVERTED_DIR, case_id, f"{case_id}_CT.nii.gz")
+    pet_path = os.path.join(PET_SUV_DIR, case_id, f"{case_id}_PET_SUV.nii.gz")
     output_pet_path = os.path.join(REGISTERED_DIR, case_id, f"{case_id}_PET_registered.nii.gz")
 
     if not os.path.exists(ct_path) or not os.path.exists(pet_path):
@@ -152,20 +152,16 @@ def register_pet_to_ct(case_id):
 
 
 def batch_register_all_cases():
-    case_folders = [f for f in os.listdir(CONVERTED_DIR) if os.path.isdir(os.path.join(CONVERTED_DIR, f))]
+    case_folders = [f for f in os.listdir(CT_CONVERTED_DIR) if os.path.isdir(os.path.join(CT_CONVERTED_DIR, f))]
     case_folders.sort()
 
     if not case_folders:
-        print(f"⚠️ 在 {CONVERTED_DIR} 中没有找到病例文件夹")
+        print(f"⚠️ 在 {CT_CONVERTED_DIR} 中没有找到病例文件夹")
         return
 
     print(f"📌 开始批量配准，共 {len(case_folders)} 个病例\n")
     success, fail = 0, 0
     for case_id in case_folders:
-        case_id_int = int(case_id)
-        # 重新执行失败的id
-        if case_id_int not in ERROR_ID:
-            continue
         print(f"正在处理: {case_id}")
         if register_pet_to_ct(case_id):
             success += 1
