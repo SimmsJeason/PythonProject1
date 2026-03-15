@@ -164,7 +164,7 @@ if __name__ == "__main__":
 
     # 如果第一步成功，再尝试启用纹理特征，并使用 binCount 固定灰度级数（例如 16）
     print("\n【第二步】启用纹理特征，使用 binCount=16 固定灰度级数")
-    test_case(TEST_CASE,'CT',
+    test_case(TEST_CASE,'PET',
               enable_firstorder=True,
               enable_shape=True,
               enable_glcm=True,
@@ -172,7 +172,7 @@ if __name__ == "__main__":
               enable_glszm=True,
               enable_ngtdm=True,
               enable_gldm=True,
-              binCount=16)   # 固定灰度级数，避免内存爆炸
+              binCount=5)   # 固定灰度级数，避免内存爆炸
 
     # 如果第二步仍失败，可以尝试只启用 GLCM（最耗内存）并进一步减小 binCount
     # 或者增大 binWidth（减少灰度级数）

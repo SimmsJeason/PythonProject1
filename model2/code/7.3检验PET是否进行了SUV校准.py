@@ -2,7 +2,8 @@ import SimpleITK as sitk
 import numpy as np
 
 # 替换为你的PET文件路径
-pet_path = r"D:\gulianyu\LungAd_Radiomics\pet_suv\1003\1003_PET_SUV.nii.gz"
+#pet_path = r"D:\gulianyu\LungAd_Radiomics\pet_suv\1016\1016_PET_SUV.nii.gz"
+pet_path = r"D:\gulianyu\LungAd_Radiomics\registered_nifti\1016\1016_PET_registered.nii.gz"
 
 pet_image = sitk.ReadImage(pet_path)
 pet_array = sitk.GetArrayFromImage(pet_image)

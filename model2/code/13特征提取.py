@@ -1,137 +1,211 @@
-# -*- coding: utf-8 -*-
 import os
+import sys
+import logging
+import traceback
+import numpy as np
 import pandas as pd
 import SimpleITK as sitk
 from radiomics import featureextractor
-import warnings
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-warnings.filterwarnings('ignore')  # 屏蔽无关警告
+# ===================== 全局配置与路径 =====================
+ROOT_DIR = r"D:\gulianyu\LungAd_Radiomics"
+PROCESSED_DIR = os.path.join(ROOT_DIR, "compilation_data")
+OUTPUT_DIR = os.path.join(ROOT_DIR, "features_output")
+LOG_DIR = os.path.join(ROOT_DIR, "log")
 
-# ===================== 配置全局路径（仅需修改ROOT_DIR） =====================
-ROOT_DIR = r"D:\gulianyu\LungAd_Radiomics"  # 替换为你的根目录
-PROCESSED_DIR = os.path.join(ROOT_DIR, "compilation_data")  # 预处理后的数据目录
-OUTPUT_DIR = os.path.join(ROOT_DIR, "features_output")  # 特征输出目录
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
+
+  # ，。
+# ；；P===================== 日志设置 =====================
+def setup_logger():
+    logger = logging.getLogger('RadiomicsBatch')
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    file_handler = logging.FileHandler(os.path.join(LOG_DIR, 'radiomics_extraction.log'), encoding='utf-8')
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+    console_handler.setFormatter(console_formatter)
+
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    return logger
 
 
-# ===================== 1. 配置特征提取参数（适配pyradiomics 2.x，肺癌研究标准） =====================
-def get_lung_radiomics_extractor():
-    """
-    配置肺癌影像组学特征提取器（适配pyradiomics 2.x，兼容所有旧版本）
-    """
-    # 初始化提取器
-    extractor = featureextractor.RadiomicsFeatureExtractor()
+logger = setup_logger()
 
-    # ---------------------- 核心参数设置（肺癌研究重点） ----------------------
-    # 1. 影像重采样（统一体素分辨率，避免设备差异）
-    extractor.settings['resampledPixelSpacing'] = [1, 1, 1]  # 重采样为1×1×1mm（肺癌标准）
-    extractor.settings['interpolator'] = sitk.sitkBSpline  # 插值方式（避免边缘失真）
 
-    # 2. 特征类型选择（旧版本逻辑：先禁用所有，再启用需要的）
-    extractor.disableAllFeatures()  # 第一步：禁用所有特征（旧版本核心）
-    # 启用肺癌研究常用特征（仅这5类，其余默认禁用）
-    extractor.enableFeatureClassByName('firstorder')  # 一阶统计特征（均值、方差、熵）
-    extractor.enableFeatureClassByName('glcm')  # 灰度共生矩阵（纹理核心）
-    extractor.enableFeatureClassByName('glrlm')  # 灰度游程矩阵（异质性）
-    extractor.enableFeatureClassByName('glszm')  # 灰度大小区域矩阵（区域分布）
-    extractor.enableFeatureClassByName('ngtdm')  # 邻域灰度差矩阵（局部纹理）
+# ===================== 特征提取器工厂 =====================
+def get_extractor(enable_firstorder=True, enable_shape=True,
+                  enable_glcm=True, enable_glrlm=True,
+                  enable_glszm=True, enable_ngtdm=True,
+                  enable_gldm=True,
+                  binWidth=None, binCount=16):
+    extractor = featureextractor.RadiomicsFeatureExtractor(
+        enableCExtensions=True,
+        threads=1
+    )
 
-    # 3. ROI掩码设置（二值化掩码专用）
-    extractor.settings['maskedKernel'] = True  # 仅计算ROI内的特征
-    extractor.settings['minimumROISize'] = 10  # 最小ROI体素数（过滤小噪声）
+    extractor.settings['resampledPixelSpacing'] = [2, 2, 2]
+    extractor.settings['interpolator'] = sitk.sitkLinear
+    extractor.settings['resampleInterpolator'] = sitk.sitkLinear
+
+    if binCount is not None:
+        extractor.settings['binCount'] = binCount
+    elif binWidth is not None:
+        extractor.settings['binWidth'] = binWidth
+
+    extractor.settings['maskedKernel'] = True
+    extractor.settings['minimumROISize'] = 10
+    extractor.settings['maskPixelValue'] = 1
+
+    extractor.disableAllFeatures()
+    if enable_firstorder: extractor.enableFeatureClassByName('firstorder')
+    if enable_shape: extractor.enableFeatureClassByName('shape')
+    if enable_glcm: extractor.enableFeatureClassByName('glcm')
+    if enable_glrlm: extractor.enableFeatureClassByName('glrlm')
+    if enable_glszm: extractor.enableFeatureClassByName('glszm')
+    if enable_ngtdm: extractor.enableFeatureClassByName('ngtdm')
+    if enable_gldm: extractor.enableFeatureClassByName('gldm')
 
     return extractor
 
 
-# ===================== 2. 单病例特征提取 =====================
-def extract_single_case(case_id, extractor, modality='CT'):
-    """
-    提取单个病例的特征
-    :param case_id: 病例编号（如case_001）
-    :param extractor: 特征提取器
-    :param modality: 模态（CT/PET）
-    :return: 特征字典（含病例ID）
-    """
-    # 构建文件路径
-    img_path = os.path.join(PROCESSED_DIR, case_id, f"{case_id}_{modality}.nii.gz")
-    if modality == 'PET':
-        img_path = os.path.join(PROCESSED_DIR, case_id, f"{case_id}_{modality}_registered.nii.gz")
-    roi_path = os.path.join(PROCESSED_DIR, case_id, f"{case_id}_ROI_bin.nii.gz")
-
-    # 检查文件是否存在
-    if not os.path.exists(img_path):
-        print(f"❌ 病例{case_id}：{modality}文件缺失 → {img_path}")
-        return None
-    if not os.path.exists(roi_path):
-        print(f"❌ 病例{case_id}：ROI文件缺失 → {roi_path}")
-        return None
+# ===================== 单病例处理逻辑 (修改版：不再保存单独CSV) =====================
+def process_single_case(case_id, modality, extractor_params):
+    log_prefix = f"[Case {case_id} {modality}]"
 
     try:
-        # 提取特征（返回字典：{特征名: 特征值}）
+        # 1. 构建路径
+        if modality == 'PET':
+            img_filename = f"{case_id}_PET_registered.nii.gz"
+        else:
+            img_filename = f"{case_id}_CT.nii.gz"
+
+        img_path = os.path.join(PROCESSED_DIR, case_id, img_filename)
+        roi_path = os.path.join(PROCESSED_DIR, case_id, f"{case_id}_ROI_bin.nii.gz")
+
+        if not os.path.exists(img_path) or not os.path.exists(roi_path):
+            logger.error(f"{log_prefix} 文件缺失")
+            return None
+
+        # 2. 初始化提取器
+        extractor = get_extractor(**extractor_params)
+
+        # 3. 执行提取
+        logger.info(f"{log_prefix} 开始提取...")
         features = extractor.execute(img_path, roi_path)
-        # 整理特征：仅保留数值型特征（过滤元信息）
-        feature_dict = {'case_id': case_id}  # 新增病例ID列（建模关键）
-        for key, value in features.items():
-            # 仅保留特征值（排除diagnostics开头的元信息）
-            if not key.startswith('diagnostics_'):
-                feature_dict[key] = value
-        print(f"✅ 病例{case_id}：{modality}特征提取完成")
-        return feature_dict
+
+        # 4. 整理结果
+        feat_dict = {'case_id': case_id}
+        feature_count = 0
+        for k, v in features.items():
+            if not k.startswith('diagnostics_'):
+                feat_dict[k] = v
+                feature_count += 1
+
+        logger.info(f"{log_prefix} 成功提取 {feature_count} 个特征")
+        return feat_dict
+
+    except MemoryError:
+        logger.error(f"{log_prefix} 内存溢出 (OOM)")
+        return None
     except Exception as e:
-        print(f"❌ 病例{case_id}：{modality}特征提取失败 → {str(e)}")
+        logger.error(f"{log_prefix} 发生错误: {str(e)}")
+        logger.debug(traceback.format_exc())
         return None
 
 
-# ===================== 3. 批量提取所有病例特征 =====================
-def batch_extract_features():
-    # 初始化提取器（适配旧版本）
-    extractor = get_lung_radiomics_extractor()
+# ===================== 批量调度主函数 (修改版：按模态分开汇总) =====================
+def main():
+    logger.info("=" * 30)
+    logger.info("开始批量影像组学特征提取")
+    logger.info(f"数据目录: {PROCESSED_DIR}")
 
-    # 获取所有病例文件夹
-    case_folders = [
-        folder for folder in os.listdir(PROCESSED_DIR)
-        if os.path.isdir(os.path.join(PROCESSED_DIR, folder))
-    ]
-    case_folders.sort()  # 按编号排序
-    print(f"📌 开始批量特征提取，共{len(case_folders)}个病例\n")
+    # 1. 准备任务列表
+    if not os.path.exists(PROCESSED_DIR):
+        logger.error(f"数据目录不存在: {PROCESSED_DIR}")
+        return
 
-    # ---------------------- 提取CT特征 ----------------------
-    # ct_features_list = []
-    # print("========== 提取CT特征 ==========")
-    # for case_id in case_folders:
-    #     ct_feat = extract_single_case(case_id, extractor, modality='CT')
-    #     if ct_feat:
-    #         ct_features_list.append(ct_feat)
-    #
-    # # 保存CT特征表
-    # ct_df = pd.DataFrame(ct_features_list)
-    # ct_df.to_csv(os.path.join(OUTPUT_DIR, "ct_features.csv"), index=False, encoding='utf-8')
-    # print(f"\n✅ CT特征表保存完成 → {os.path.join(OUTPUT_DIR, 'ct_features.csv')}")
+    all_cases = [d for d in os.listdir(PROCESSED_DIR) if os.path.isdir(os.path.join(PROCESSED_DIR, d))]
+    #all_cases = all_cases[:3] #测试用
+    if not all_cases:
+        logger.warning("未找到任何病例数据文件夹！")
+        return
 
-    # ---------------------- 提取PET特征 ----------------------
-    pet_features_list = []
-    print("\n========== 提取PET特征 ==========")
-    for case_id in case_folders:
-        pet_feat = extract_single_case(case_id, extractor, modality='PET')
-        if pet_feat:
-            pet_features_list.append(pet_feat)
+    modalities_to_process = ['CT', 'PET']
+    tasks = []
+    for case in all_cases:
+        for mod in modalities_to_process:
+            tasks.append((case, mod))
 
-    # 保存PET特征表
-    pet_df = pd.DataFrame(pet_features_list)
-    pet_df.to_csv(os.path.join(OUTPUT_DIR, "pet_features.csv"), index=False, encoding='utf-8')
-    print(f"\n✅ PET特征表保存完成 → {os.path.join(OUTPUT_DIR, 'pet_features.csv')}")
+    logger.info(f"共发现 {len(all_cases)} 个病例，计划处理 {len(tasks)} 个任务")
 
-    # # ---------------------- 合并CT+PET特征 ----------------------
-    # if not ct_df.empty and not pet_df.empty:
-    #     combined_df = pd.merge(ct_df, pet_df, on='case_id', suffixes=('_CT', '_PET'))
-    #     combined_df.to_csv(os.path.join(OUTPUT_DIR, "combined_features.csv"), index=False, encoding='utf-8')
-    #     print(f"\n✅ 合并特征表保存完成 → {os.path.join(OUTPUT_DIR, 'combined_features.csv')}")
-    # else:
-    #     print("\n⚠️  CT/PET特征表为空，未生成合并表")
+    # 2. 配置提取参数
+    extractor_config = {
+        'enable_firstorder': True,
+        'enable_shape': True,
+        'enable_glcm': True,
+        'enable_glrlm': True,
+        'enable_glszm': True,
+        'enable_ngtdm': True,
+        'enable_gldm': True,
+        'binCount': 16,
+    }
 
-    print("\n🎉 所有病例特征提取完成！")
+    # 3. 多线程执行
+    all_results = []
+    max_workers = 8
+
+    logger.info(f"启动线程池，最大工作线程数: {max_workers}")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_task = {
+            executor.submit(process_single_case, case, mod, extractor_config): (case, mod)
+            for case, mod in tasks
+        }
+
+        for future in tqdm(as_completed(future_to_task), total=len(tasks), desc="总体进度"):
+            case_id, modality = future_to_task[future]
+            res = future.result()
+            if res is not None:
+                # 在结果中标记模态，用于后续分组
+                res['modality'] = modality
+                all_results.append(res)
+
+    # 4. 最终汇总与分开保存 (核心修改点)
+    if all_results:
+        final_df = pd.DataFrame(all_results)
+
+        # 分别筛选 CT 和 PET
+        ct_df = final_df[final_df['modality'] == 'CT'].copy()
+        pet_df = final_df[final_df['modality'] == 'PET'].copy()
+
+        # 保存 CT 特征 (删除 modality 列)
+        if not ct_df.empty:
+            ct_df.drop(columns=['modality'], inplace=True)
+            ct_output_path = os.path.join(OUTPUT_DIR, "ct_features.csv")
+            ct_df.to_csv(ct_output_path, index=False)
+            logger.info(f"CT 特征汇总完成，共 {len(ct_df)} 个病例，已保存至: {ct_output_path}")
+
+        # 保存 PET 特征 (删除 modality 列)
+        if not pet_df.empty:
+            pet_df.drop(columns=['modality'], inplace=True)
+            pet_output_path = os.path.join(OUTPUT_DIR, "pet_features.csv")
+            pet_df.to_csv(pet_output_path, index=False)
+            logger.info(f"PET 特征汇总完成，共 {len(pet_df)} 个病例，已保存至: {pet_output_path}")
+
+        logger.info("=" * 30)
+        logger.info(f"全部流程结束。")
+    else:
+        logger.warning("没有成功提取任何特征，请检查日志。")
 
 
-# ===================== 运行主函数 =====================
 if __name__ == "__main__":
-    batch_extract_features()
+    main()

@@ -5,12 +5,12 @@ import re
 def main():
     # 源根目录列表
     src_roots = [
-        r'D:\gulianyu\LungAd_Radiomics\binarized_roi',
-        r'D:\gulianyu\LungAd_Radiomics\converted_nifti',
-        'D:\gulianyu\LungAd_Radiomics\\registered_nifti'
+        #r'D:\gulianyu\LungAd_Radiomics\binarized_roi',
+        #r'D:\gulianyu\LungAd_Radiomics\converted_nifti',
+        r'D:\gulianyu\LungAd_Radiomics\\registered_nifti'
     ]
     # 目标根目录
-    dst_root = r'D:\gulianyu\LungAd_Radiomics\total'
+    dst_root = r'D:\gulianyu\LungAd_Radiomics\compilation_data'
 
     # 创建目标根目录（如果不存在）
     os.makedirs(dst_root, exist_ok=True)
