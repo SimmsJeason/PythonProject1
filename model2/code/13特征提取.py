@@ -9,6 +9,8 @@ from radiomics import featureextractor
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from model2.code.contants import TEST_CASE_ID, TEST_SWITCH
+
 # ===================== 全局配置与路径 =====================
 ROOT_DIR = r"D:\gulianyu\LungAd_Radiomics"
 PROCESSED_DIR = os.path.join(ROOT_DIR, "compilation_data")
@@ -142,6 +144,9 @@ def main():
     modalities_to_process = ['CT', 'PET']
     tasks = []
     for case in all_cases:
+        case_id_int = int(case)
+        if TEST_SWITCH and case_id_int not in TEST_CASE_ID:
+            continue
         for mod in modalities_to_process:
             tasks.append((case, mod))
 

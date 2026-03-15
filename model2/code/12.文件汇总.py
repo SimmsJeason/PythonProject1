@@ -2,7 +2,10 @@ import os
 import shutil
 import re
 
-def main():
+from model2.code.contants import TEST_CASE_ID, TEST_SWITCH
+
+
+def file_compilation():
     # 源根目录列表
     src_roots = [
         #r'D:\gulianyu\LungAd_Radiomics\binarized_roi',
@@ -39,6 +42,9 @@ def main():
             continue
 
         for sub in sub_dirs:
+            sub_int = int(sub)
+            if TEST_SWITCH and sub_int not in TEST_CASE_ID:
+                continue
             src_sub = os.path.join(src_root, sub)
             dst_case = os.path.join(dst_root, sub)
             os.makedirs(dst_case, exist_ok=True)
@@ -102,4 +108,4 @@ def main():
     print(f"错误数：{total_errors}")
 
 if __name__ == "__main__":
-    main()
+    file_compilation()

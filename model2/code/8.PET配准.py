@@ -3,6 +3,8 @@ import os
 import SimpleITK as sitk
 import numpy as np
 
+from model2.code.contants import TEST_CASE_ID, TEST_SWITCH
+
 # ===================== 配置全局路径 =====================
 ROOT_DIR = r"D:\gulianyu\LungAd_Radiomics"
 CT_CONVERTED_DIR = os.path.join(ROOT_DIR, "converted_nifti")
@@ -55,7 +57,10 @@ def ensure_3d(image, image_name="图像"):
         return None
 
 
-def register_pet_to_ct(case_id):
+def resample_pet_to_ct(case_id):
+    """
+    修改为：直接基于硬件物理坐标系将PET重采样到CT网格
+    """
     ct_path = os.path.join(CT_CONVERTED_DIR, case_id, f"{case_id}_CT.nii.gz")
     pet_path = os.path.join(PET_SUV_DIR, case_id, f"{case_id}_PET_SUV.nii.gz")
     output_pet_path = os.path.join(REGISTERED_DIR, case_id, f"{case_id}_PET_registered.nii.gz")
@@ -67,89 +72,48 @@ def register_pet_to_ct(case_id):
     os.makedirs(os.path.join(REGISTERED_DIR, case_id), exist_ok=True)
 
     try:
-        # 读取原始图像
+        # 1. 读取图像
         ct_image_raw = sitk.ReadImage(ct_path)
         pet_image_raw = sitk.ReadImage(pet_path)
 
-        # 确保图像为3D单通道
+        # 2. 确保3D (直接用你原本的函数)
         ct_image = ensure_3d(ct_image_raw, "CT")
         pet_image = ensure_3d(pet_image_raw, "PET")
         if ct_image is None or pet_image is None:
             return False
 
-        # 统一像素类型为float32（配准所需）
-        if ct_image.GetPixelID() != sitk.sitkFloat32:
-            ct_image = sitk.Cast(ct_image, sitk.sitkFloat32)
-        if pet_image.GetPixelID() != sitk.sitkFloat32:
-            pet_image = sitk.Cast(pet_image, sitk.sitkFloat32)
-
-        # 再次确认维度一致
-        if ct_image.GetDimension() != 3 or pet_image.GetDimension() != 3:
-            print("❌ 图像维度仍不是3D")
-            return False
-
-        # 初始化配准方法
-        registration_method = sitk.ImageRegistrationMethod()
-
-        # 设置互信息度量
-        registration_method.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
-        registration_method.SetMetricSamplingStrategy(registration_method.RANDOM)
-        registration_method.SetMetricSamplingPercentage(0.01)
-
-        # 优化器
-        registration_method.SetOptimizerAsGradientDescent(
-            learningRate=1.0,
-            numberOfIterations=200,
-            convergenceMinimumValue=1e-6,
-            convergenceWindowSize=10
-        )
-        registration_method.SetOptimizerScalesFromPhysicalShift()
-
-        # 插值
-        registration_method.SetInterpolator(sitk.sitkLinear)
-
-        # 初始变换（基于几何中心）
-        try:
-            transform = sitk.CenteredTransformInitializer(
-                ct_image,
-                pet_image,
-                sitk.Euler3DTransform(),
-                sitk.CenteredTransformInitializerFilter.GEOMETRY
-            )
-        except Exception as e:
-            print(f"初始变换失败: {e}，尝试使用MOMENTS方法")
-            transform = sitk.CenteredTransformInitializer(
-                ct_image,
-                pet_image,
-                sitk.Euler3DTransform(),
-                sitk.CenteredTransformInitializerFilter.MOMENTS
-            )
-
-        registration_method.SetInitialTransform(transform, inPlace=False)
-
-        # 执行配准
-        print(f"⏳ 病例{case_id}：正在配准...")
-        final_transform = registration_method.Execute(ct_image, pet_image)
-        print(f"  最终变换参数: {final_transform.GetParameters()}")
-
-        # 应用变换到PET
+        # 3. 设置重采样器 (Resampler)
         resampler = sitk.ResampleImageFilter()
-        resampler.SetReferenceImage(ct_image)
-        resampler.SetInterpolator(sitk.sitkLinear)
-        resampler.SetTransform(final_transform)
-        registered_pet = resampler.Execute(pet_image)
 
-        # 保存结果
-        sitk.WriteImage(registered_pet, output_pet_path)
-        print(f"✅ 病例{case_id}：配准完成 -> {output_pet_path}")
+        # 【核心步骤】：以CT作为参考图像 (Reference Image)
+        # 这会自动提取CT的 Size, Spacing, Origin 和 Direction
+        resampler.SetReferenceImage(ct_image)
+
+        # 设置插值方法
+        # 对于连续数值(SUV)，推荐使用 B-Spline 或 线性插值。
+        # B-Spline (sitkBSpline) 在处理医学图像数值时更平滑，线性(sitkLinear)也可以
+        resampler.SetInterpolator(sitk.sitkBSpline)
+
+        # 默认的 Transform 就是 IdentityTransform (也就是不发生额外的位移)
+        resampler.SetTransform(sitk.Transform())
+
+        # 如果超出边界的像素，填充为 0
+        resampler.SetDefaultPixelValue(0)
+
+        # 4. 执行重采样
+        print(f"⏳ 病例{case_id}：正在将 PET 重采样到 CT 网格...")
+        resampled_pet = resampler.Execute(pet_image)
+
+        # 5. 保存结果
+        sitk.WriteImage(resampled_pet, output_pet_path)
+        print(f"✅ 病例{case_id}：重采样完成 -> {output_pet_path}")
         return True
 
     except Exception as e:
-        print(f"❌ 病例{case_id}：配准失败 -> {str(e)}")
+        print(f"❌ 病例{case_id}：重采样失败 -> {str(e)}")
         import traceback
         traceback.print_exc()
         return False
-
 
 def batch_register_all_cases():
     case_folders = [f for f in os.listdir(CT_CONVERTED_DIR) if os.path.isdir(os.path.join(CT_CONVERTED_DIR, f))]
@@ -162,15 +126,17 @@ def batch_register_all_cases():
     print(f"📌 开始批量配准，共 {len(case_folders)} 个病例\n")
     success, fail = 0, 0
     for case_id in case_folders:
+        case_id_int = int(case_id)
+        if TEST_SWITCH and case_id_int not in TEST_CASE_ID:
+            continue
         print(f"正在处理: {case_id}")
-        if register_pet_to_ct(case_id):
+        if resample_pet_to_ct(case_id):
             success += 1
         else:
             fail += 1
         print("-" * 50)
 
     print(f"\n🎉 批量配准完成！成功={success}, 失败={fail}")
-
 
 if __name__ == "__main__":
     batch_register_all_cases()
